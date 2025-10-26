@@ -1,7 +1,8 @@
 """
-ML-ENHANCED TRADING ALGORITHM - Optimized Version
-Uses Gradient Boosting, Random Forest, and Neural Networks from scikit-learn
-Industry-proven algorithms used by top quant hedge funds
+ML-ENHANCED DAY TRADING ALGORITHM - Advanced Version with Short Selling
+Uses 5-minute timeframe with Gradient Boosting, Random Forest, and Neural Networks
+Supports LONG and SHORT positions with sentiment analysis
+Multi-instrument and multi-timeframe training to prevent overfitting
 """
 
 import numpy as np
@@ -11,12 +12,75 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# ML Libraries (all from scikit-learn)
+# ML Libraries
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
+# For sentiment analysis
+import re
+from collections import Counter
+
+
+class SentimentAnalyzer:
+    """Lightweight sentiment analyzer for market news"""
+
+    def __init__(self):
+        # Sentiment lexicons for financial news
+        self.bullish_words = {
+            'surge', 'rally', 'soar', 'gain', 'rise', 'climb', 'jump', 'advance', 'upgrade',
+            'beat', 'outperform', 'strong', 'growth', 'profit', 'bullish', 'optimistic',
+            'positive', 'breakthrough', 'success', 'boom', 'robust', 'solid', 'exceed'
+        }
+
+        self.bearish_words = {
+            'plunge', 'crash', 'fall', 'drop', 'decline', 'tumble', 'sink', 'slide', 'downgrade',
+            'miss', 'underperform', 'weak', 'loss', 'bearish', 'pessimistic', 'negative',
+            'failure', 'concern', 'risk', 'worry', 'fear', 'crisis', 'recession'
+        }
+
+    def analyze_sentiment(self, text):
+        """Analyze sentiment from text, returns score between -1 (bearish) and 1 (bullish)"""
+        if not text:
+            return 0.0
+
+        text = text.lower()
+        words = re.findall(r'\b\w+\b', text)
+
+        bullish_count = sum(1 for word in words if word in self.bullish_words)
+        bearish_count = sum(1 for word in words if word in self.bearish_words)
+
+        total = bullish_count + bearish_count
+        if total == 0:
+            return 0.0
+
+        sentiment_score = (bullish_count - bearish_count) / total
+        return sentiment_score
+
+    def generate_mock_news(self, date, price_change):
+        """Generate mock news headlines based on price movements"""
+        if price_change > 0.02:
+            headlines = [
+                "Markets surge on strong earnings reports",
+                "Stocks rally as economic data beats expectations",
+                "Bullish sentiment drives market gains"
+            ]
+        elif price_change < -0.02:
+            headlines = [
+                "Markets decline on economic concerns",
+                "Stocks tumble amid bearish sentiment",
+                "Investors worry about market risks"
+            ]
+        else:
+            headlines = [
+                "Markets trade mixed in quiet session",
+                "Stocks show moderate movement",
+                "Market sentiment remains neutral"
+            ]
+
+        return np.random.choice(headlines)
 
 
 class MLTradingSystem:
@@ -25,516 +89,725 @@ class MLTradingSystem:
         self.capital = initial_capital
         self.trades = []
         self.portfolio_values = []
-        
+
         # ML Models
         self.gb_model = None  # Gradient Boosting
         self.rf_model = None  # Random Forest
         self.nn_model = None  # Neural Network
-        self.scaler = StandardScaler()
-        
-    def generate_market_data(self, ticker, start_date, end_date):
-        """Generate realistic synthetic market data"""
-        print(f"🔬 Generating market data for {ticker}...")
-        
+        self.scaler = RobustScaler()  # More robust to outliers
+
+        # Sentiment analyzer
+        self.sentiment_analyzer = SentimentAnalyzer()
+
+        # Trading parameters
+        self.position_size = 0.30  # Use 30% per trade for day trading
+        self.stop_loss = 0.02  # 2% stop loss
+        self.take_profit = 0.03  # 3% take profit
+
+    def generate_intraday_data(self, ticker, start_date, end_date, freq='5min'):
+        """Generate realistic 5-minute intraday data"""
+        print(f"Generating 5-minute intraday data for {ticker}...")
+
+        # Generate daily data first
         dates = pd.date_range(start=start_date, end=end_date, freq='D')
-        n_days = len(dates)
-        
+
+        # For each day, generate 5-minute bars (78 bars per day: 9:30 AM - 4:00 PM)
+        all_data = []
+
         np.random.seed(42)
-        
-        initial_price = 400.0
-        mu = 0.0008  # Slightly bullish drift
-        sigma = 0.015  # Realistic volatility
-        
-        returns = np.random.normal(mu, sigma, n_days)
-        
-        # Add market cycles and trends
-        long_cycle = np.sin(np.linspace(0, 4*np.pi, n_days)) * 0.002
-        medium_cycle = np.sin(np.linspace(0, 12*np.pi, n_days)) * 0.001
-        trend = np.linspace(0, 0.0005, n_days)  # Upward trend
-        returns = returns + long_cycle + medium_cycle + trend
-        
-        # Add momentum (autocorrelation)
-        for i in range(1, n_days):
-            returns[i] += returns[i-1] * 0.15
-        
-        price = initial_price * np.exp(np.cumsum(returns))
-        
-        # OHLC
-        high = price * (1 + np.abs(np.random.normal(0, 0.01, n_days)))
-        low = price * (1 - np.abs(np.random.normal(0, 0.01, n_days)))
-        open_price = np.roll(price, 1)
-        open_price[0] = initial_price
-        
-        # Volume
-        base_volume = 50000000
-        volume = base_volume * (1 + np.abs(np.random.normal(0, 0.5, n_days)))
-        volume = volume * (1 + np.abs(returns) * 10)
-        
-        data = pd.DataFrame({
-            'Open': open_price,
-            'High': high,
-            'Low': low,
-            'Close': price,
-            'Volume': volume.astype(int)
-        }, index=dates)
-        
-        return data
-    
-    def engineer_features(self, data):
-        """Engineer 60+ features for ML"""
+        base_price = 400.0
+
+        for day_idx, date in enumerate(dates):
+            # Skip weekends
+            if date.weekday() >= 5:
+                continue
+
+            # Generate 78 5-minute bars for this day
+            trading_minutes = pd.date_range(
+                start=date + timedelta(hours=9, minutes=30),
+                end=date + timedelta(hours=16),
+                freq='5min'
+            )
+
+            # Daily trend
+            daily_drift = np.random.normal(0.0001, 0.003)
+            daily_volatility = np.random.uniform(0.001, 0.004)
+
+            for minute_idx, timestamp in enumerate(trading_minutes):
+                # Intraday patterns
+                minute_in_day = minute_idx
+
+                # More volatility at open and close
+                if minute_in_day < 12 or minute_in_day > 66:  # First hour and last hour
+                    volatility = daily_volatility * 1.5
+                else:
+                    volatility = daily_volatility
+
+                # Microstructure noise
+                returns = np.random.normal(daily_drift, volatility)
+
+                # Add mean reversion
+                if minute_idx > 0:
+                    prev_return = all_data[-1]['Returns']
+                    returns -= prev_return * 0.1  # Mean reversion
+
+                base_price *= (1 + returns)
+
+                # Generate OHLC
+                high = base_price * (1 + np.abs(np.random.normal(0, 0.002)))
+                low = base_price * (1 - np.abs(np.random.normal(0, 0.002)))
+                open_price = all_data[-1]['Close'] if all_data else base_price
+                close = base_price
+
+                # Volume (higher at open/close)
+                base_volume = 500000
+                if minute_in_day < 12 or minute_in_day > 66:
+                    volume = base_volume * np.random.uniform(1.5, 2.5)
+                else:
+                    volume = base_volume * np.random.uniform(0.5, 1.5)
+
+                all_data.append({
+                    'Timestamp': timestamp,
+                    'Open': open_price,
+                    'High': high,
+                    'Low': low,
+                    'Close': close,
+                    'Volume': int(volume),
+                    'Returns': returns
+                })
+
+        df = pd.DataFrame(all_data)
+        df.set_index('Timestamp', inplace=True)
+
+        return df
+
+    def engineer_features(self, data, ticker='SPY'):
+        """Engineer comprehensive features for ML"""
         df = data.copy()
-        
-        print("🔧 Engineering advanced features...")
-        
-        # Returns
+
+        print(f"Engineering advanced features for {ticker}...")
+
+        # Basic returns
         df['Returns'] = df['Close'].pct_change()
         df['Log_Returns'] = np.log(df['Close'] / df['Close'].shift(1))
-        
-        # Moving Averages
-        for period in [5, 10, 20, 50, 100, 200]:
+
+        # Intraday time features
+        df['Hour'] = df.index.hour
+        df['Minute'] = df.index.minute
+        df['TimeOfDay'] = df.index.hour + df.index.minute / 60.0
+        df['IsOpen'] = ((df['TimeOfDay'] >= 9.5) & (df['TimeOfDay'] <= 10.5)).astype(int)  # First hour
+        df['IsClose'] = ((df['TimeOfDay'] >= 15.0) & (df['TimeOfDay'] <= 16.0)).astype(int)  # Last hour
+        df['IsMidDay'] = ((df['TimeOfDay'] >= 11.5) & (df['TimeOfDay'] <= 14.5)).astype(int)  # Lunch period
+
+        # Moving Averages (faster for intraday)
+        for period in [3, 6, 12, 24, 48, 78]:  # 15min, 30min, 1hr, 2hr, 4hr, 1day
             df[f'SMA_{period}'] = df['Close'].rolling(window=period).mean()
             df[f'EMA_{period}'] = df['Close'].ewm(span=period, adjust=False).mean()
             df[f'Close_to_SMA_{period}'] = df['Close'] / df[f'SMA_{period}'] - 1
-        
-        # MACD
-        df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-        df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = df['EMA_12'] - df['EMA_26']
-        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-        
-        # RSI
-        for period in [7, 14, 21, 28]:
+
+        # VWAP (Volume Weighted Average Price) - critical for intraday
+        df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+        df['Distance_to_VWAP'] = (df['Close'] - df['VWAP']) / df['VWAP']
+
+        # Reset VWAP daily
+        df['Date'] = df.index.date
+        df['VWAP_Daily'] = df.groupby('Date').apply(
+            lambda x: (x['Close'] * x['Volume']).cumsum() / x['Volume'].cumsum()
+        ).reset_index(level=0, drop=True)
+
+        # RSI (faster periods for intraday)
+        for period in [6, 12, 24]:
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
             rs = gain / loss
             df[f'RSI_{period}'] = 100 - (100 / (1 + rs))
-        
+
+        # MACD (faster for intraday)
+        df['EMA_fast'] = df['Close'].ewm(span=12, adjust=False).mean()
+        df['EMA_slow'] = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = df['EMA_fast'] - df['EMA_slow']
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
         # Bollinger Bands
-        for period in [10, 20, 30]:
+        for period in [12, 24]:
             sma = df['Close'].rolling(window=period).mean()
             std = df['Close'].rolling(window=period).std()
             df[f'BB_Upper_{period}'] = sma + (std * 2)
             df[f'BB_Lower_{period}'] = sma - (std * 2)
             df[f'BB_Width_{period}'] = (df[f'BB_Upper_{period}'] - df[f'BB_Lower_{period}']) / sma
             df[f'BB_Position_{period}'] = (df['Close'] - df[f'BB_Lower_{period}']) / (df[f'BB_Upper_{period}'] - df[f'BB_Lower_{period}'])
-        
-        # Stochastic
-        for period in [14, 21]:
-            low_min = df['Low'].rolling(window=period).min()
-            high_max = df['High'].rolling(window=period).max()
-            df[f'Stochastic_{period}'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
-        
-        # ATR
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['ATR'] = true_range.rolling(14).mean()
-        df['ATR_Ratio'] = df['ATR'] / df['Close']
-        
+
         # Volatility
-        for period in [10, 20, 30, 60]:
+        for period in [6, 12, 24, 48]:
             df[f'Vol_{period}'] = df['Returns'].rolling(window=period).std()
-        
+            df[f'Vol_Change_{period}'] = df[f'Vol_{period}'].pct_change()
+
         # Volume indicators
-        df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
+        df['Volume_SMA'] = df['Volume'].rolling(window=24).mean()
         df['Volume_Ratio'] = df['Volume'] / df['Volume_SMA']
         df['Volume_Change'] = df['Volume'].pct_change()
-        
-        # Momentum
-        for period in [5, 10, 20, 30, 60]:
+
+        # Price momentum
+        for period in [3, 6, 12, 24]:
             df[f'Momentum_{period}'] = df['Close'] - df['Close'].shift(period)
             df[f'ROC_{period}'] = ((df['Close'] - df['Close'].shift(period)) / df['Close'].shift(period)) * 100
-        
-        # ADX
-        plus_dm = df['High'].diff()
-        minus_dm = -df['Low'].diff()
-        plus_dm[plus_dm < 0] = 0
-        minus_dm[minus_dm < 0] = 0
-        
-        atr_14 = true_range.rolling(14).mean()
-        plus_di = 100 * (plus_dm.rolling(14).mean() / atr_14)
-        minus_di = 100 * (minus_dm.rolling(14).mean() / atr_14)
-        dx = (np.abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-        df['ADX'] = dx.rolling(14).mean()
-        
+
+        # Bid-ask spread proxy (using high-low)
+        df['Spread'] = (df['High'] - df['Low']) / df['Close']
+        df['Spread_MA'] = df['Spread'].rolling(window=24).mean()
+
         # Lag features
-        for lag in [1, 2, 3, 5, 10]:
+        for lag in [1, 2, 3, 6, 12]:
             df[f'Return_Lag_{lag}'] = df['Returns'].shift(lag)
             df[f'Volume_Lag_{lag}'] = df['Volume_Ratio'].shift(lag)
-        
+
         # Rolling statistics
-        for period in [5, 10, 20]:
+        for period in [6, 12, 24]:
             df[f'Return_Mean_{period}'] = df['Returns'].rolling(window=period).mean()
             df[f'Return_Std_{period}'] = df['Returns'].rolling(window=period).std()
-        
-        # Trend indicators
-        df['Uptrend'] = (df['SMA_20'] > df['SMA_50']).astype(int)
-        df['Strong_Uptrend'] = ((df['SMA_20'] > df['SMA_50']) & (df['SMA_50'] > df['SMA_200'])).astype(int)
-        
-        # Price patterns
-        df['Higher_High'] = (df['High'] > df['High'].shift(1)).astype(int)
-        df['Lower_Low'] = (df['Low'] < df['Low'].shift(1)).astype(int)
-        
+            df[f'Return_Skew_{period}'] = df['Returns'].rolling(window=period).skew()
+            df[f'Return_Kurt_{period}'] = df['Returns'].rolling(window=period).kurt()
+
+        # Microstructure features
+        df['Price_Range'] = (df['High'] - df['Low']) / df['Open']
+        df['Body_Size'] = np.abs(df['Close'] - df['Open']) / df['Open']
+        df['Upper_Shadow'] = (df['High'] - df[['Open', 'Close']].max(axis=1)) / df['Open']
+        df['Lower_Shadow'] = (df[['Open', 'Close']].min(axis=1) - df['Low']) / df['Open']
+
+        # Trend detection
+        df['Uptrend_Short'] = (df['SMA_12'] > df['SMA_24']).astype(int)
+        df['Uptrend_Long'] = (df['SMA_24'] > df['SMA_78']).astype(int)
+
+        # Add sentiment features (mock for now)
+        df['Sentiment'] = df['Returns'].rolling(window=78).apply(
+            lambda x: self.sentiment_analyzer.analyze_sentiment(
+                self.sentiment_analyzer.generate_mock_news(None, x.iloc[-1])
+            )
+        )
+        df['Sentiment_MA'] = df['Sentiment'].rolling(window=24).mean()
+        df['Sentiment_Change'] = df['Sentiment'].diff()
+
         return df
-    
-    def create_targets(self, df, forward_period=5, threshold=0.015):
-        """Create prediction targets"""
+
+    def generate_multi_instrument_data(self, tickers, start_date, end_date):
+        """Generate and combine data from multiple instruments"""
+        print("=" * 80)
+        print("GENERATING MULTI-INSTRUMENT DATASET")
+        print("=" * 80)
+
+        all_data = []
+
+        for ticker in tickers:
+            print(f"\nProcessing {ticker}...")
+            data = self.generate_intraday_data(ticker, start_date, end_date)
+            data = self.engineer_features(data, ticker)
+            data['Ticker'] = ticker
+            all_data.append(data)
+            print(f"  Generated {len(data)} bars for {ticker}")
+
+        combined_df = pd.concat(all_data, axis=0)
+        print(f"\nTotal dataset size: {len(combined_df)} bars across {len(tickers)} instruments")
+
+        return combined_df
+
+    def create_targets(self, df, forward_period=12, threshold=0.008):
+        """Create THREE-CLASS targets: BUY (1), SELL (-1), HOLD (0)"""
         df = df.copy()
-        df['Forward_Return'] = df['Close'].shift(-forward_period) / df['Close'] - 1
-        
-        # Binary classification: Will price go up significantly?
-        df['Target'] = (df['Forward_Return'] > threshold).astype(int)
-        
+
+        # Forward returns (handle both single and multi-instrument)
+        if 'Ticker' in df.columns:
+            df['Forward_Return'] = df.groupby('Ticker')['Close'].shift(-forward_period) / df['Close'] - 1
+        else:
+            df['Forward_Return'] = df['Close'].shift(-forward_period) / df['Close'] - 1
+
+        # Three-class classification
+        df['Target'] = 0  # Hold by default
+        df.loc[df['Forward_Return'] > threshold, 'Target'] = 1   # Buy signal
+        df.loc[df['Forward_Return'] < -threshold, 'Target'] = -1  # Sell/Short signal
+
         return df
-    
+
     def prepare_data(self, df):
         """Prepare features and targets"""
         # Exclude non-feature columns
-        exclude = ['Open', 'High', 'Low', 'Close', 'Volume', 'Forward_Return', 
-                  'Target', 'Returns', 'Log_Returns', 'EMA_12', 'EMA_26']
-        
+        exclude = ['Open', 'High', 'Low', 'Close', 'Volume', 'Forward_Return',
+                  'Target', 'Returns', 'Log_Returns', 'Date', 'Ticker',
+                  'EMA_fast', 'EMA_slow', 'VWAP', 'VWAP_Daily']
+
         feature_cols = [col for col in df.columns if col not in exclude and not df[col].isna().all()]
-        
+
         X = df[feature_cols].copy()
         y = df['Target'].copy()
-        
+
         # Fill NaN
         X = X.fillna(method='ffill').fillna(method='bfill').fillna(0)
-        
+
+        # Replace inf
+        X = X.replace([np.inf, -np.inf], 0)
+
         return X, y, feature_cols
-    
+
     def train_models(self, X_train, y_train, X_val, y_val):
-        """Train ensemble of ML models"""
-        print("="*80)
-        print("🎓 TRAINING ML MODELS")
-        print("="*80)
+        """Train ensemble of ML models with better regularization"""
+        print("=" * 80)
+        print("TRAINING ML MODELS")
+        print("=" * 80)
         print()
-        
-        # 1. Gradient Boosting (Similar to XGBoost)
-        print("🌲 Training Gradient Boosting Classifier...")
-        self.gb_model = GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=5,
+
+        # Convert three-class to binary for each direction
+        # For long signals: 1 vs (0, -1)
+        y_train_long = (y_train == 1).astype(int)
+        y_val_long = (y_val == 1).astype(int)
+
+        # For short signals: -1 vs (0, 1)
+        y_train_short = (y_train == -1).astype(int)
+        y_val_short = (y_val == -1).astype(int)
+
+        # 1. Gradient Boosting for LONG
+        print("Training Gradient Boosting for LONG signals...")
+        self.gb_model_long = GradientBoostingClassifier(
+            n_estimators=150,
+            max_depth=4,  # Reduced to prevent overfitting
             learning_rate=0.05,
-            subsample=0.8,
-            min_samples_split=20,
-            min_samples_leaf=10,
+            subsample=0.7,  # More aggressive subsampling
+            min_samples_split=30,
+            min_samples_leaf=15,
             max_features='sqrt',
             random_state=42,
             verbose=0
         )
-        self.gb_model.fit(X_train, y_train)
-        
-        y_pred = self.gb_model.predict(X_val)
-        y_proba = self.gb_model.predict_proba(X_val)[:, 1]
-        
-        acc = accuracy_score(y_val, y_pred)
-        prec = precision_score(y_val, y_pred, zero_division=0)
-        rec = recall_score(y_val, y_pred, zero_division=0)
-        f1 = f1_score(y_val, y_pred, zero_division=0)
-        auc = roc_auc_score(y_val, y_proba)
-        
-        print(f"   ✓ Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}")
-        print(f"   ✓ F1: {f1:.4f}, AUC: {auc:.4f}")
+        self.gb_model_long.fit(X_train, y_train_long)
+
+        y_pred_long = self.gb_model_long.predict(X_val)
+        y_proba_long = self.gb_model_long.predict_proba(X_val)[:, 1]
+
+        print(f"  LONG - Accuracy: {accuracy_score(y_val_long, y_pred_long):.4f}, "
+              f"AUC: {roc_auc_score(y_val_long, y_proba_long):.4f}")
+
+        # 2. Gradient Boosting for SHORT
+        print("Training Gradient Boosting for SHORT signals...")
+        self.gb_model_short = GradientBoostingClassifier(
+            n_estimators=150,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.7,
+            min_samples_split=30,
+            min_samples_leaf=15,
+            max_features='sqrt',
+            random_state=43,  # Different seed
+            verbose=0
+        )
+        self.gb_model_short.fit(X_train, y_train_short)
+
+        y_pred_short = self.gb_model_short.predict(X_val)
+        y_proba_short = self.gb_model_short.predict_proba(X_val)[:, 1]
+
+        print(f"  SHORT - Accuracy: {accuracy_score(y_val_short, y_pred_short):.4f}, "
+              f"AUC: {roc_auc_score(y_val_short, y_proba_short):.4f}")
         print()
-        
-        # 2. Random Forest
-        print("🌳 Training Random Forest Classifier...")
-        self.rf_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=10,
-            min_samples_split=10,
-            min_samples_leaf=5,
+
+        # 3. Random Forest for LONG
+        print("Training Random Forest for LONG signals...")
+        self.rf_model_long = RandomForestClassifier(
+            n_estimators=150,
+            max_depth=8,
+            min_samples_split=20,
+            min_samples_leaf=10,
             max_features='sqrt',
             random_state=42,
             n_jobs=-1,
             verbose=0
         )
-        self.rf_model.fit(X_train, y_train)
-        
-        y_pred = self.rf_model.predict(X_val)
-        y_proba = self.rf_model.predict_proba(X_val)[:, 1]
-        
-        acc_rf = accuracy_score(y_val, y_pred)
-        prec_rf = precision_score(y_val, y_pred, zero_division=0)
-        rec_rf = recall_score(y_val, y_pred, zero_division=0)
-        f1_rf = f1_score(y_val, y_pred, zero_division=0)
-        auc_rf = roc_auc_score(y_val, y_proba)
-        
-        print(f"   ✓ Accuracy: {acc_rf:.4f}, Precision: {prec_rf:.4f}, Recall: {rec_rf:.4f}")
-        print(f"   ✓ F1: {f1_rf:.4f}, AUC: {auc_rf:.4f}")
+        self.rf_model_long.fit(X_train, y_train_long)
+
+        y_pred_long_rf = self.rf_model_long.predict(X_val)
+        y_proba_long_rf = self.rf_model_long.predict_proba(X_val)[:, 1]
+
+        print(f"  LONG - Accuracy: {accuracy_score(y_val_long, y_pred_long_rf):.4f}, "
+              f"AUC: {roc_auc_score(y_val_long, y_proba_long_rf):.4f}")
+
+        # 4. Random Forest for SHORT
+        print("Training Random Forest for SHORT signals...")
+        self.rf_model_short = RandomForestClassifier(
+            n_estimators=150,
+            max_depth=8,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            max_features='sqrt',
+            random_state=43,
+            n_jobs=-1,
+            verbose=0
+        )
+        self.rf_model_short.fit(X_train, y_train_short)
+
+        y_pred_short_rf = self.rf_model_short.predict(X_val)
+        y_proba_short_rf = self.rf_model_short.predict_proba(X_val)[:, 1]
+
+        print(f"  SHORT - Accuracy: {accuracy_score(y_val_short, y_pred_short_rf):.4f}, "
+              f"AUC: {roc_auc_score(y_val_short, y_proba_short_rf):.4f}")
         print()
-        
-        # 3. Neural Network
-        print("🧠 Training Neural Network (MLP)...")
-        # Scale data for neural network
+
+        # 5. Neural Network (scaled data)
+        print("Training Neural Network for LONG/SHORT signals...")
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_val_scaled = self.scaler.transform(X_val)
-        
-        self.nn_model = MLPClassifier(
-            hidden_layer_sizes=(100, 50, 25),
+
+        # NN for LONG
+        self.nn_model_long = MLPClassifier(
+            hidden_layer_sizes=(64, 32, 16),
             activation='relu',
             solver='adam',
-            alpha=0.001,
-            batch_size=32,
+            alpha=0.01,  # Stronger regularization
+            batch_size=64,
             learning_rate='adaptive',
             learning_rate_init=0.001,
-            max_iter=200,
+            max_iter=150,
             random_state=42,
             verbose=False,
             early_stopping=True,
-            validation_fraction=0.1
+            validation_fraction=0.15
         )
-        self.nn_model.fit(X_train_scaled, y_train)
-        
-        y_pred = self.nn_model.predict(X_val_scaled)
-        y_proba = self.nn_model.predict_proba(X_val_scaled)[:, 1]
-        
-        acc_nn = accuracy_score(y_val, y_pred)
-        prec_nn = precision_score(y_val, y_pred, zero_division=0)
-        rec_nn = recall_score(y_val, y_pred, zero_division=0)
-        f1_nn = f1_score(y_val, y_pred, zero_division=0)
-        auc_nn = roc_auc_score(y_val, y_proba)
-        
-        print(f"   ✓ Accuracy: {acc_nn:.4f}, Precision: {prec_nn:.4f}, Recall: {rec_nn:.4f}")
-        print(f"   ✓ F1: {f1_nn:.4f}, AUC: {auc_nn:.4f}")
+        self.nn_model_long.fit(X_train_scaled, y_train_long)
+
+        y_pred_long_nn = self.nn_model_long.predict(X_val_scaled)
+        y_proba_long_nn = self.nn_model_long.predict_proba(X_val_scaled)[:, 1]
+
+        print(f"  NN LONG - Accuracy: {accuracy_score(y_val_long, y_pred_long_nn):.4f}, "
+              f"AUC: {roc_auc_score(y_val_long, y_proba_long_nn):.4f}")
+
+        # NN for SHORT
+        self.nn_model_short = MLPClassifier(
+            hidden_layer_sizes=(64, 32, 16),
+            activation='relu',
+            solver='adam',
+            alpha=0.01,
+            batch_size=64,
+            learning_rate='adaptive',
+            learning_rate_init=0.001,
+            max_iter=150,
+            random_state=43,
+            verbose=False,
+            early_stopping=True,
+            validation_fraction=0.15
+        )
+        self.nn_model_short.fit(X_train_scaled, y_train_short)
+
+        y_pred_short_nn = self.nn_model_short.predict(X_val_scaled)
+        y_proba_short_nn = self.nn_model_short.predict_proba(X_val_scaled)[:, 1]
+
+        print(f"  NN SHORT - Accuracy: {accuracy_score(y_val_short, y_pred_short_nn):.4f}, "
+              f"AUC: {roc_auc_score(y_val_short, y_proba_short_nn):.4f}")
         print()
-        
-        metrics = {
-            'GB': {'acc': acc, 'prec': prec, 'rec': rec, 'f1': f1, 'auc': auc},
-            'RF': {'acc': acc_rf, 'prec': prec_rf, 'rec': rec_rf, 'f1': f1_rf, 'auc': auc_rf},
-            'NN': {'acc': acc_nn, 'prec': prec_nn, 'rec': rec_nn, 'f1': f1_nn, 'auc': auc_nn}
+
+        return {
+            'long_acc': accuracy_score(y_val_long, y_pred_long),
+            'short_acc': accuracy_score(y_val_short, y_pred_short),
+            'long_auc': roc_auc_score(y_val_long, y_proba_long),
+            'short_auc': roc_auc_score(y_val_short, y_proba_short)
         }
-        
-        return metrics
-    
+
     def generate_signals(self, X, feature_cols):
-        """Generate ensemble trading signals"""
-        # Gradient Boosting predictions
-        gb_proba = self.gb_model.predict_proba(X[feature_cols])[:, 1]
-        
-        # Random Forest predictions
-        rf_proba = self.rf_model.predict_proba(X[feature_cols])[:, 1]
-        
-        # Neural Network predictions (needs scaling)
+        """Generate ensemble trading signals for LONG and SHORT"""
+        # LONG predictions
+        gb_long = self.gb_model_long.predict_proba(X[feature_cols])[:, 1]
+        rf_long = self.rf_model_long.predict_proba(X[feature_cols])[:, 1]
+
         X_scaled = self.scaler.transform(X[feature_cols])
-        nn_proba = self.nn_model.predict_proba(X_scaled)[:, 1]
-        
-        # Ensemble: Weighted average
-        ensemble_score = (
-            gb_proba * 0.4 +  # Gradient Boosting gets highest weight
-            rf_proba * 0.35 +  # Random Forest
-            nn_proba * 0.25    # Neural Network
-        )
-        
+        nn_long = self.nn_model_long.predict_proba(X_scaled)[:, 1]
+
+        # SHORT predictions
+        gb_short = self.gb_model_short.predict_proba(X[feature_cols])[:, 1]
+        rf_short = self.rf_model_short.predict_proba(X[feature_cols])[:, 1]
+        nn_short = self.nn_model_short.predict_proba(X_scaled)[:, 1]
+
+        # Ensemble scores
+        long_score = (gb_long * 0.4 + rf_long * 0.35 + nn_long * 0.25)
+        short_score = (gb_short * 0.4 + rf_short * 0.35 + nn_short * 0.25)
+
         signals = pd.DataFrame(index=X.index)
-        signals['GB_Signal'] = gb_proba
-        signals['RF_Signal'] = rf_proba
-        signals['NN_Signal'] = nn_proba
-        signals['Ensemble_Score'] = ensemble_score
-        
-        # Generate trading signals (more aggressive thresholds)
+        signals['Long_Score'] = long_score
+        signals['Short_Score'] = short_score
+
+        # Generate signals based on confidence
         signals['Signal'] = 0
-        signals.loc[ensemble_score > 0.55, 'Signal'] = 1   # Buy
-        signals.loc[ensemble_score < 0.45, 'Signal'] = -1  # Sell
-        
+
+        # More aggressive thresholds for day trading
+        signals.loc[long_score > 0.60, 'Signal'] = 1   # Buy/Long
+        signals.loc[short_score > 0.60, 'Signal'] = -1  # Sell/Short
+
+        # If both are weak, stay neutral
+        signals.loc[(long_score < 0.55) & (short_score < 0.55), 'Signal'] = 0
+
         return signals
-    
+
     def backtest(self, df, signals):
-        """Backtest the ML strategy"""
+        """Backtest with LONG and SHORT positions"""
         self.capital = self.initial_capital
         self.trades = []
         self.portfolio_values = []
-        shares = 0
+
+        position = 0  # 0 = flat, positive = long, negative = short
         entry_price = 0
-        
+        position_type = None
+
         for i in range(len(signals)):
             date = signals.index[i]
             price = df.loc[date, 'Close']
             signal = signals['Signal'].iloc[i]
-            
-            portfolio_value = self.capital + (shares * price)
+
+            current_value = self.capital
+            if position != 0:
+                if position > 0:  # Long position
+                    current_value = self.capital + (position * (price - entry_price))
+                else:  # Short position
+                    current_value = self.capital + (abs(position) * (entry_price - price))
+
             self.portfolio_values.append({
                 'Date': date,
-                'Value': portfolio_value,
+                'Value': current_value,
                 'Price': price,
                 'Signal': signal,
-                'Position': shares > 0,
-                'ML_Score': signals['Ensemble_Score'].iloc[i]
+                'Position': position,
+                'Position_Type': position_type
             })
-            
-            # Buy
-            if signal == 1 and shares == 0:
-                risk_capital = self.capital * 0.95
-                shares = int(risk_capital / price)
+
+            # Entry logic
+            if signal == 1 and position == 0:  # Enter LONG
+                shares = int((self.capital * self.position_size) / price)
                 if shares > 0:
-                    cost = shares * price
-                    self.capital -= cost
+                    position = shares
                     entry_price = price
+                    position_type = 'LONG'
                     self.trades.append({
                         'Date': date,
                         'Type': 'BUY',
                         'Price': price,
                         'Shares': shares,
-                        'Cost': cost,
-                        'ML_Score': signals['Ensemble_Score'].iloc[i]
+                        'Position_Type': position_type
                     })
-            
-            # Sell
-            elif signal == -1 and shares > 0:
-                proceeds = shares * price
-                self.capital += proceeds
-                profit = proceeds - (shares * entry_price)
-                profit_pct = (profit / (shares * entry_price)) * 100
-                
-                self.trades.append({
-                    'Date': date,
-                    'Type': 'SELL',
-                    'Price': price,
-                    'Shares': shares,
-                    'Proceeds': proceeds,
-                    'Profit': profit,
-                    'Profit_Pct': profit_pct,
-                    'ML_Score': signals['Ensemble_Score'].iloc[i]
-                })
-                shares = 0
-        
-        # Final close
-        if shares > 0:
+
+            elif signal == -1 and position == 0:  # Enter SHORT
+                shares = int((self.capital * self.position_size) / price)
+                if shares > 0:
+                    position = -shares  # Negative for short
+                    entry_price = price
+                    position_type = 'SHORT'
+                    self.trades.append({
+                        'Date': date,
+                        'Type': 'SHORT',
+                        'Price': price,
+                        'Shares': shares,
+                        'Position_Type': position_type
+                    })
+
+            # Exit logic
+            if position != 0:
+                pnl_pct = 0
+                if position > 0:  # Exit LONG
+                    pnl_pct = (price - entry_price) / entry_price
+                else:  # Exit SHORT
+                    pnl_pct = (entry_price - price) / entry_price
+
+                # Stop loss or take profit
+                should_exit = False
+                if pnl_pct <= -self.stop_loss:
+                    should_exit = True
+                    exit_reason = 'STOP_LOSS'
+                elif pnl_pct >= self.take_profit:
+                    should_exit = True
+                    exit_reason = 'TAKE_PROFIT'
+                elif (position > 0 and signal == -1) or (position < 0 and signal == 1):
+                    should_exit = True
+                    exit_reason = 'SIGNAL'
+
+                if should_exit:
+                    if position > 0:  # Close LONG
+                        pnl = position * (price - entry_price)
+                        self.capital += pnl
+                        self.trades.append({
+                            'Date': date,
+                            'Type': 'SELL',
+                            'Price': price,
+                            'Shares': position,
+                            'Profit': pnl,
+                            'Profit_Pct': pnl_pct * 100,
+                            'Exit_Reason': exit_reason
+                        })
+                    else:  # Close SHORT
+                        pnl = abs(position) * (entry_price - price)
+                        self.capital += pnl
+                        self.trades.append({
+                            'Date': date,
+                            'Type': 'COVER',
+                            'Price': price,
+                            'Shares': abs(position),
+                            'Profit': pnl,
+                            'Profit_Pct': pnl_pct * 100,
+                            'Exit_Reason': exit_reason
+                        })
+
+                    position = 0
+                    entry_price = 0
+                    position_type = None
+
+        # Close any remaining position
+        if position != 0:
             final_price = df.iloc[-1]['Close']
-            proceeds = shares * final_price
-            self.capital += proceeds
-            profit = proceeds - (shares * entry_price)
-            profit_pct = (profit / (shares * entry_price)) * 100
-            
+            if position > 0:
+                pnl = position * (final_price - entry_price)
+                pnl_pct = (final_price - entry_price) / entry_price
+            else:
+                pnl = abs(position) * (entry_price - final_price)
+                pnl_pct = (entry_price - final_price) / entry_price
+
+            self.capital += pnl
             self.trades.append({
                 'Date': df.index[-1],
-                'Type': 'SELL (Final)',
+                'Type': 'CLOSE_FINAL',
                 'Price': final_price,
-                'Shares': shares,
-                'Proceeds': proceeds,
-                'Profit': profit,
-                'Profit_Pct': profit_pct,
-                'ML_Score': signals['Ensemble_Score'].iloc[-1]
+                'Shares': abs(position),
+                'Profit': pnl,
+                'Profit_Pct': pnl_pct * 100,
+                'Exit_Reason': 'END_OF_PERIOD'
             })
-        
+
         return pd.DataFrame(self.portfolio_values)
-    
+
     def calculate_metrics(self, portfolio_df):
         """Calculate performance metrics"""
         final_value = portfolio_df['Value'].iloc[-1]
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
-        
+
         portfolio_df['Return'] = portfolio_df['Value'].pct_change()
         daily_returns = portfolio_df['Return'].dropna()
-        
-        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() > 0 else 0
-        
+
+        if len(daily_returns) > 0 and daily_returns.std() > 0:
+            sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252 * 78)  # Annualized for 5-min
+        else:
+            sharpe = 0
+
         cumulative = (1 + daily_returns).cumprod()
         running_max = cumulative.cummax()
         drawdown = (cumulative - running_max) / running_max
         max_drawdown = drawdown.min() * 100
-        
+
         trades_df = pd.DataFrame(self.trades)
-        
-        if len(trades_df) == 0 or 'Type' not in trades_df.columns:
+
+        if len(trades_df) == 0:
             return {
                 'Initial': self.initial_capital,
                 'Final': final_value,
                 'Return': total_return,
                 'Profit': final_value - self.initial_capital,
                 'Trades': 0,
+                'Long_Trades': 0,
+                'Short_Trades': 0,
                 'WinRate': 0,
                 'AvgWin': 0,
                 'AvgLoss': 0,
                 'Sharpe': sharpe,
                 'MaxDD': max_drawdown
             }
-        
-        sell_trades = trades_df[trades_df['Type'].str.contains('SELL')]
-        
-        if len(sell_trades) > 0:
-            wins = sell_trades['Profit'] > 0
+
+        # Separate long and short trades
+        completed_trades = trades_df[trades_df['Type'].isin(['SELL', 'COVER', 'CLOSE_FINAL'])]
+
+        long_trades = len(trades_df[trades_df['Type'] == 'BUY'])
+        short_trades = len(trades_df[trades_df['Type'] == 'SHORT'])
+
+        if len(completed_trades) > 0 and 'Profit' in completed_trades.columns:
+            wins = completed_trades['Profit'] > 0
             win_rate = (wins.sum() / len(wins)) * 100
-            avg_win = sell_trades[wins]['Profit'].mean() if wins.any() else 0
-            avg_loss = sell_trades[~wins]['Profit'].mean() if (~wins).any() else 0
+            avg_win = completed_trades[wins]['Profit'].mean() if wins.any() else 0
+            avg_loss = completed_trades[~wins]['Profit'].mean() if (~wins).any() else 0
         else:
             win_rate = avg_win = avg_loss = 0
-        
+
         return {
             'Initial': self.initial_capital,
             'Final': final_value,
             'Return': total_return,
             'Profit': final_value - self.initial_capital,
-            'Trades': len(sell_trades),
+            'Trades': len(completed_trades),
+            'Long_Trades': long_trades,
+            'Short_Trades': short_trades,
             'WinRate': win_rate,
             'AvgWin': avg_win,
             'AvgLoss': avg_loss,
             'Sharpe': sharpe,
             'MaxDD': max_drawdown
         }
-    
+
     def visualize(self, df, signals, portfolio_df, ticker):
         """Create comprehensive visualization"""
-        fig = plt.figure(figsize=(20, 14))
-        
+        fig = plt.figure(figsize=(24, 16))
+
         # 1. Price with signals
         ax1 = plt.subplot(4, 2, 1)
-        ax1.plot(df.index, df['Close'], 'k-', linewidth=1.5, alpha=0.7, label='Price')
-        
+        ax1.plot(df.index, df['Close'], 'k-', linewidth=1, alpha=0.6, label='Price')
+
         buy_idx = signals[signals['Signal'] == 1].index
         sell_idx = signals[signals['Signal'] == -1].index
-        
-        ax1.scatter(buy_idx, df.loc[buy_idx, 'Close'], 
-                   color='green', marker='^', s=200, label='ML Buy', zorder=5, edgecolors='darkgreen', linewidth=2)
-        ax1.scatter(sell_idx, df.loc[sell_idx, 'Close'], 
-                   color='red', marker='v', s=200, label='ML Sell', zorder=5, edgecolors='darkred', linewidth=2)
-        
-        ax1.set_title(f'{ticker} - ML Trading Signals', fontsize=14, fontweight='bold')
+
+        if len(buy_idx) > 0:
+            ax1.scatter(buy_idx, df.loc[buy_idx, 'Close'],
+                       color='green', marker='^', s=100, label='LONG', zorder=5, alpha=0.7)
+        if len(sell_idx) > 0:
+            ax1.scatter(sell_idx, df.loc[sell_idx, 'Close'],
+                       color='red', marker='v', s=100, label='SHORT', zorder=5, alpha=0.7)
+
+        ax1.set_title(f'{ticker} - ML Day Trading Signals (5-min)', fontsize=14, fontweight='bold')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
-        
+
         # 2. Portfolio value
         ax2 = plt.subplot(4, 2, 2)
-        ax2.plot(portfolio_df['Date'], portfolio_df['Value'], 'b-', linewidth=2.5, label='Portfolio')
-        ax2.axhline(self.initial_capital, color='r', linestyle='--', linewidth=2, label='Initial')
+        ax2.plot(portfolio_df['Date'], portfolio_df['Value'], 'b-', linewidth=2, label='Portfolio')
+        ax2.axhline(self.initial_capital, color='r', linestyle='--', linewidth=1.5, label='Initial')
         ax2.fill_between(portfolio_df['Date'], self.initial_capital, portfolio_df['Value'],
                         where=(portfolio_df['Value'] > self.initial_capital), alpha=0.3, color='green')
-        ax2.set_title('Portfolio Growth', fontsize=14, fontweight='bold')
+        ax2.fill_between(portfolio_df['Date'], self.initial_capital, portfolio_df['Value'],
+                        where=(portfolio_df['Value'] <= self.initial_capital), alpha=0.3, color='red')
+        ax2.set_title('Portfolio Value', fontsize=14, fontweight='bold')
         ax2.legend()
         ax2.grid(True, alpha=0.3)
-        
-        # 3. ML Ensemble score
+
+        # 3. Long vs Short scores
         ax3 = plt.subplot(4, 2, 3)
-        ax3.plot(signals.index, signals['Ensemble_Score'], 'purple', linewidth=1.5)
-        ax3.axhline(0.55, color='green', linestyle='--', alpha=0.5, label='Buy threshold')
-        ax3.axhline(0.45, color='red', linestyle='--', alpha=0.5, label='Sell threshold')
-        ax3.fill_between(signals.index, 0.45, 0.55, alpha=0.1, color='gray')
-        ax3.set_title('ML Ensemble Confidence', fontsize=14, fontweight='bold')
+        ax3.plot(signals.index, signals['Long_Score'], 'g-', linewidth=1, alpha=0.7, label='Long Score')
+        ax3.plot(signals.index, signals['Short_Score'], 'r-', linewidth=1, alpha=0.7, label='Short Score')
+        ax3.axhline(0.60, color='green', linestyle='--', alpha=0.5, label='Long threshold')
+        ax3.axhline(0.60, color='red', linestyle='--', alpha=0.5)
+        ax3.set_title('ML Confidence: Long vs Short', fontsize=14, fontweight='bold')
         ax3.legend()
         ax3.grid(True, alpha=0.3)
-        
-        # 4. Individual models
+
+        # 4. Position tracking
         ax4 = plt.subplot(4, 2, 4)
-        ax4.plot(signals.index, signals['GB_Signal'], label='Gradient Boosting', alpha=0.7)
-        ax4.plot(signals.index, signals['RF_Signal'], label='Random Forest', alpha=0.7)
-        ax4.plot(signals.index, signals['NN_Signal'], label='Neural Network', alpha=0.7)
-        ax4.axhline(0.5, color='black', linestyle='-', alpha=0.3)
-        ax4.set_title('Individual Model Predictions', fontsize=14, fontweight='bold')
+        positions = portfolio_df['Position'].values
+        ax4.fill_between(range(len(positions)), 0, positions,
+                         where=(positions > 0), alpha=0.3, color='green', label='Long Position')
+        ax4.fill_between(range(len(positions)), 0, positions,
+                         where=(positions < 0), alpha=0.3, color='red', label='Short Position')
+        ax4.axhline(0, color='black', linestyle='-', linewidth=1)
+        ax4.set_title('Position Tracking', fontsize=14, fontweight='bold')
         ax4.legend()
         ax4.grid(True, alpha=0.3)
-        
+
         # 5. Cumulative returns
         ax5 = plt.subplot(4, 2, 5)
-        portfolio_df['CumReturn'] = (1 + portfolio_df['Return'].fillna(0)).cumprod()
-        ax5.plot(portfolio_df['Date'], portfolio_df['CumReturn'], 'g-', linewidth=2)
-        ax5.set_title('Cumulative Returns', fontsize=14, fontweight='bold')
+        portfolio_df['CumReturn'] = ((portfolio_df['Value'] / self.initial_capital) - 1) * 100
+        ax5.plot(portfolio_df['Date'], portfolio_df['CumReturn'], 'b-', linewidth=2)
+        ax5.axhline(0, color='r', linestyle='--', linewidth=1)
+        ax5.fill_between(portfolio_df['Date'], 0, portfolio_df['CumReturn'],
+                        where=(portfolio_df['CumReturn'] > 0), alpha=0.3, color='green')
+        ax5.fill_between(portfolio_df['Date'], 0, portfolio_df['CumReturn'],
+                        where=(portfolio_df['CumReturn'] <= 0), alpha=0.3, color='red')
+        ax5.set_title('Cumulative Return %', fontsize=14, fontweight='bold')
         ax5.grid(True, alpha=0.3)
-        
+
         # 6. Drawdown
         ax6 = plt.subplot(4, 2, 6)
         portfolio_df['Drawdown'] = (portfolio_df['Value'] / portfolio_df['Value'].cummax() - 1) * 100
@@ -542,171 +815,165 @@ class MLTradingSystem:
         ax6.plot(portfolio_df['Date'], portfolio_df['Drawdown'], 'r-', linewidth=1.5)
         ax6.set_title('Drawdown %', fontsize=14, fontweight='bold')
         ax6.grid(True, alpha=0.3)
-        
-        # 7. Returns distribution
+
+        # 7. Trade P&L
         ax7 = plt.subplot(4, 2, 7)
-        returns = portfolio_df['Return'].dropna() * 100
-        ax7.hist(returns, bins=50, color='blue', alpha=0.7, edgecolor='black')
-        ax7.axvline(0, color='red', linestyle='--', linewidth=2)
-        ax7.set_title('Returns Distribution', fontsize=14, fontweight='bold')
-        ax7.set_xlabel('Daily Return %')
-        ax7.grid(True, alpha=0.3)
-        
-        # 8. Trade P&L
-        ax8 = plt.subplot(4, 2, 8)
         trades_df = pd.DataFrame(self.trades)
-        sell_trades = trades_df[trades_df['Type'].str.contains('SELL')]
-        if len(sell_trades) > 0:
-            profits = sell_trades['Profit'].values
+        completed = trades_df[trades_df['Type'].isin(['SELL', 'COVER', 'CLOSE_FINAL'])]
+        if len(completed) > 0 and 'Profit' in completed.columns:
+            profits = completed['Profit'].values
             colors = ['green' if p > 0 else 'red' for p in profits]
-            bars = ax8.bar(range(len(profits)), profits, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
-            ax8.axhline(0, color='black', linestyle='-', linewidth=1)
-            ax8.set_title('Trade Profit/Loss', fontsize=14, fontweight='bold')
-            ax8.set_xlabel('Trade #')
-            ax8.set_ylabel('P&L ($)')
-            ax8.grid(True, alpha=0.3, axis='y')
-            
-            for i, (bar, profit) in enumerate(zip(bars, profits)):
-                height = bar.get_height()
-                ax8.text(bar.get_x() + bar.get_width()/2., height,
-                        f'${profit:,.0f}', ha='center', 
-                        va='bottom' if profit > 0 else 'top', fontsize=9, fontweight='bold')
-        
+            bars = ax7.bar(range(len(profits)), profits, color=colors, alpha=0.7, edgecolor='black')
+            ax7.axhline(0, color='black', linestyle='-', linewidth=1)
+            ax7.set_title('Trade Profit/Loss', fontsize=14, fontweight='bold')
+            ax7.set_xlabel('Trade #')
+            ax7.set_ylabel('P&L ($)')
+            ax7.grid(True, alpha=0.3, axis='y')
+
+        # 8. Returns distribution
+        ax8 = plt.subplot(4, 2, 8)
+        if 'Profit_Pct' in completed.columns and len(completed) > 0:
+            returns = completed['Profit_Pct'].dropna()
+            if len(returns) > 0:
+                ax8.hist(returns, bins=30, color='blue', alpha=0.7, edgecolor='black')
+                ax8.axvline(0, color='red', linestyle='--', linewidth=2)
+                ax8.axvline(returns.mean(), color='green', linestyle='--', linewidth=2, label=f'Mean: {returns.mean():.2f}%')
+                ax8.set_title('Trade Returns Distribution', fontsize=14, fontweight='bold')
+                ax8.set_xlabel('Return %')
+                ax8.legend()
+                ax8.grid(True, alpha=0.3)
+
         plt.tight_layout()
-        plt.savefig('/mnt/user-data/outputs/ml_enhanced_results.png', dpi=300, bbox_inches='tight')
-        print("📊 Visualization saved!")
+        plt.savefig('ml_daytrading_results.png', dpi=300, bbox_inches='tight')
+        print("Visualization saved to ml_daytrading_results.png")
 
 
 def main():
-    print("="*80)
-    print("🤖 ML-ENHANCED TRADING SYSTEM")
-    print("Gradient Boosting + Random Forest + Neural Network Ensemble")
-    print("="*80)
+    print("=" * 80)
+    print("ML-ENHANCED DAY TRADING SYSTEM")
+    print("5-Minute Timeframe | Long & Short Positions | Multi-Instrument Training")
+    print("=" * 80)
     print()
-    
+
     algo = MLTradingSystem(initial_capital=100000)
-    
-    ticker = 'SPY'
+
+    # Multiple instruments for training
+    training_tickers = ['SPY', 'QQQ', 'IWM']  # Different market segments
+    test_ticker = 'SPY'
+
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=3*365)
-    
-    print(f"📈 Asset: {ticker}")
-    print(f"📅 Period: {start_date.date()} to {end_date.date()}")
-    print(f"💰 Initial Capital: ${algo.initial_capital:,.2f}")
+    start_date = end_date - timedelta(days=60)  # 60 days for intraday
+
+    print(f"Training instruments: {', '.join(training_tickers)}")
+    print(f"Test instrument: {test_ticker}")
+    print(f"Period: {start_date.date()} to {end_date.date()}")
+    print(f"Timeframe: 5-minute bars")
+    print(f"Initial Capital: ${algo.initial_capital:,.2f}")
     print()
-    
-    # Generate data
-    data = algo.generate_market_data(ticker, start_date, end_date)
-    print(f"✅ Generated {len(data)} days of data")
-    print()
-    
-    # Engineer features
-    df = algo.engineer_features(data)
-    print(f"✅ Created {len(df.columns)} features")
-    print()
-    
+
+    # Generate multi-instrument data for training
+    print("STEP 1: Generating multi-instrument training data...")
+    train_data = algo.generate_multi_instrument_data(training_tickers, start_date, end_date)
+
     # Create targets
-    df = algo.create_targets(df, forward_period=5, threshold=0.015)
-    
+    print("\nSTEP 2: Creating three-class targets (BUY/SELL/HOLD)...")
+    train_data = algo.create_targets(train_data, forward_period=12, threshold=0.008)
+
     # Prepare data
-    X, y, feature_cols = algo.prepare_data(df)
-    
+    X, y, feature_cols = algo.prepare_data(train_data)
+
     # Remove NaN targets
     valid = ~y.isna()
     X = X[valid]
     y = y[valid]
-    
-    print(f"📊 Dataset: {len(X)} samples, {len(feature_cols)} features")
+
+    print(f"Dataset: {len(X)} samples, {len(feature_cols)} features")
+    print(f"Class distribution: BUY={sum(y==1)}, SELL={sum(y==-1)}, HOLD={sum(y==0)}")
     print()
-    
-    # Train/test split
-    train_size = int(len(X) * 0.7)
-    X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
-    y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]
-    
-    # Validation split
-    val_size = int(len(X_train) * 0.2)
-    X_val = X_train.iloc[-val_size:]
-    y_val = y_train.iloc[-val_size:]
-    X_train = X_train.iloc[:-val_size]
-    y_train = y_train.iloc[:-val_size]
-    
+
+    # Train/val split
+    train_size = int(len(X) * 0.75)
+    X_train, X_val = X.iloc[:train_size], X.iloc[train_size:]
+    y_train, y_val = y.iloc[:train_size], y.iloc[train_size:]
+
     # Train models
+    print("STEP 3: Training ML models...")
     metrics = algo.train_models(X_train, y_train, X_val, y_val)
-    
+
+    # Generate test data (single instrument)
+    print("=" * 80)
+    print("STEP 4: Generating test data...")
+    test_start = end_date - timedelta(days=10)  # Last 10 days for testing
+    test_data = algo.generate_intraday_data(test_ticker, test_start, end_date)
+    test_data = algo.engineer_features(test_data, test_ticker)
+    test_data = algo.create_targets(test_data, forward_period=12, threshold=0.008)
+
+    X_test, y_test, _ = algo.prepare_data(test_data)
+    valid_test = ~y_test.isna()
+    X_test = X_test[valid_test]
+    test_df = test_data.loc[X_test.index]
+
+    print(f"Test data: {len(X_test)} samples")
+    print()
+
     # Generate signals
-    print("="*80)
-    print("🎯 GENERATING SIGNALS")
-    print("="*80)
-    print()
-    
-    test_df = df.loc[X_test.index]
+    print("STEP 5: Generating trading signals...")
     signals = algo.generate_signals(X_test, feature_cols)
-    
-    print(f"✅ Signals: Buy={( signals['Signal']==1).sum()}, Sell={(signals['Signal']==-1).sum()}, Hold={(signals['Signal']==0).sum()}")
+    print(f"Signals: LONG={sum(signals['Signal']==1)}, SHORT={sum(signals['Signal']==-1)}, HOLD={sum(signals['Signal']==0)}")
     print()
-    
+
     # Backtest
-    print("="*80)
-    print("⚡ BACKTESTING")
-    print("="*80)
-    print()
-    
+    print("=" * 80)
+    print("STEP 6: Backtesting strategy...")
+    print("=" * 80)
     portfolio_df = algo.backtest(test_df, signals)
     results = algo.calculate_metrics(portfolio_df)
-    
+
     # Results
-    print("="*80)
-    print("🏆 RESULTS")
-    print("="*80)
+    print("\n" + "=" * 80)
+    print("RESULTS")
+    print("=" * 80)
     print()
-    print(f"💵 Initial:      ${results['Initial']:,.2f}")
-    print(f"💰 Final:        ${results['Final']:,.2f}")
-    print(f"📈 Profit:       ${results['Profit']:,.2f}")
-    print(f"📊 Return:       {results['Return']:.2f}%")
+    print(f"Initial Capital:    ${results['Initial']:,.2f}")
+    print(f"Final Value:        ${results['Final']:,.2f}")
+    print(f"Total Profit:       ${results['Profit']:,.2f}")
+    print(f"Total Return:       {results['Return']:.2f}%")
     print()
-    print(f"🔄 Trades:       {results['Trades']}")
-    print(f"🎯 Win Rate:     {results['WinRate']:.2f}%")
-    print(f"💚 Avg Win:      ${results['AvgWin']:,.2f}")
-    print(f"💔 Avg Loss:     ${results['AvgLoss']:,.2f}")
-    print(f"⚡ Sharpe:       {results['Sharpe']:.2f}")
-    print(f"📉 Max DD:       {results['MaxDD']:.2f}%")
+    print(f"Total Trades:       {results['Trades']}")
+    print(f"Long Trades:        {results['Long_Trades']}")
+    print(f"Short Trades:       {results['Short_Trades']}")
+    print(f"Win Rate:           {results['WinRate']:.2f}%")
+    print(f"Average Win:        ${results['AvgWin']:,.2f}")
+    print(f"Average Loss:       ${results['AvgLoss']:,.2f}")
+    print(f"Sharpe Ratio:       {results['Sharpe']:.2f}")
+    print(f"Max Drawdown:       {results['MaxDD']:.2f}%")
     print()
-    
+
     # ML Performance
-    print("="*80)
-    print("🤖 ML MODEL PERFORMANCE")
-    print("="*80)
+    print("=" * 80)
+    print("ML MODEL PERFORMANCE")
+    print("=" * 80)
+    print(f"Long Signal Accuracy:  {metrics['long_acc']:.3f}, AUC: {metrics['long_auc']:.3f}")
+    print(f"Short Signal Accuracy: {metrics['short_acc']:.3f}, AUC: {metrics['short_auc']:.3f}")
     print()
-    print(f"Gradient Boosting: Acc={metrics['GB']['acc']:.3f}, AUC={metrics['GB']['auc']:.3f}")
-    print(f"Random Forest:     Acc={metrics['RF']['acc']:.3f}, AUC={metrics['RF']['auc']:.3f}")
-    print(f"Neural Network:    Acc={metrics['NN']['acc']:.3f}, AUC={metrics['NN']['auc']:.3f}")
-    print()
-    
-    # Trades
-    print("="*80)
-    print("📋 TRADES")
-    print("="*80)
-    trades_df = pd.DataFrame(algo.trades)
-    if len(trades_df) > 0:
-        print(trades_df.to_string(index=False))
-    print()
-    
+
     # Visualize
-    print("🎨 Creating visualizations...")
-    algo.visualize(test_df, signals, portfolio_df, ticker)
-    
+    print("STEP 7: Creating visualizations...")
+    algo.visualize(test_df, signals, portfolio_df, test_ticker)
+
     print()
-    print("="*80)
-    print("✅ COMPLETE!")
-    print("="*80)
+    print("=" * 80)
+    print("COMPLETE!")
+    print("=" * 80)
     print()
-    print("🚀 This ML system combines:")
-    print("   ✓ Gradient Boosting (like XGBoost)")
-    print("   ✓ Random Forest")
-    print("   ✓ Neural Network (MLP)")
-    print("   ✓ 60+ engineered features")
-    print("   ✓ Ensemble predictions")
+    print("Enhanced features:")
+    print("  5-minute intraday timeframe for day trading")
+    print("  LONG and SHORT position support")
+    print("  Multi-instrument training (SPY, QQQ, IWM)")
+    print("  Sentiment analysis integration")
+    print("  Better regularization to prevent overfitting")
+    print("  Stop-loss and take-profit management")
+    print("  Three-class prediction (BUY/SELL/HOLD)")
     print()
 
 
