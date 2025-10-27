@@ -105,66 +105,139 @@ class MLTradingSystem:
         self.take_profit = 0.03  # 3% take profit
 
     def generate_intraday_data(self, ticker, start_date, end_date, freq='5min'):
-        """Generate realistic 5-minute intraday data"""
-        print(f"Generating 5-minute intraday data for {ticker}...")
+        """Generate REALISTIC market-like 5-minute intraday data with complex patterns"""
+        print(f"Generating realistic market data for {ticker}...")
 
-        # Generate daily data first
+        # Seed based on ticker for different behavior per instrument
+        seed_map = {'SPY': 42, 'QQQ': 123, 'IWM': 456}
+        np.random.seed(seed_map.get(ticker, 42))
+
+        # Starting prices that match real instruments
+        price_map = {'SPY': 450.0, 'QQQ': 380.0, 'IWM': 195.0}
+        base_price = price_map.get(ticker, 400.0)
+
         dates = pd.date_range(start=start_date, end=end_date, freq='D')
-
-        # For each day, generate 5-minute bars (78 bars per day: 9:30 AM - 4:00 PM)
         all_data = []
 
-        np.random.seed(42)
-        base_price = 400.0
+        # Volatility state (for GARCH-like clustering)
+        volatility_state = 0.015
 
         for day_idx, date in enumerate(dates):
             # Skip weekends
             if date.weekday() >= 5:
                 continue
 
-            # Generate 78 5-minute bars for this day
+            # Generate 5-minute bars (9:30 AM - 4:00 PM EST)
             trading_minutes = pd.date_range(
                 start=date + timedelta(hours=9, minutes=30),
                 end=date + timedelta(hours=16),
                 freq='5min'
             )
 
-            # Daily trend
-            daily_drift = np.random.normal(0.0001, 0.003)
-            daily_volatility = np.random.uniform(0.001, 0.004)
+            # Daily characteristics
+            daily_trend = np.random.choice([-1, 0, 1], p=[0.3, 0.4, 0.3])  # Down, sideways, up
+            daily_drift = daily_trend * np.random.uniform(0.0001, 0.0008)
 
+            # Opening gap (common in real markets)
+            if day_idx > 0:
+                gap = np.random.normal(0, 0.003)  # Overnight gap
+                # Larger gaps on Mondays
+                if date.weekday() == 0:
+                    gap *= 1.5
+                base_price *= (1 + gap)
+
+            # Random news events during the day (causes jumps)
+            news_times = np.random.choice(len(trading_minutes), size=np.random.randint(0, 3), replace=False)
+
+            prev_return = 0
             for minute_idx, timestamp in enumerate(trading_minutes):
-                # Intraday patterns
                 minute_in_day = minute_idx
 
-                # More volatility at open and close
-                if minute_in_day < 12 or minute_in_day > 66:  # First hour and last hour
-                    volatility = daily_volatility * 1.5
+                # === Intraday patterns (U-shaped volatility and volume) ===
+                time_factor = 1.0
+                if minute_in_day < 18:  # First 1.5 hours (high volatility)
+                    time_factor = 2.0 - (minute_in_day / 18) * 0.8
+                elif minute_in_day > 60:  # Last 1.5 hours (increasing volatility)
+                    time_factor = 1.2 + ((minute_in_day - 60) / 18) * 0.8
+                else:  # Mid-day (lower volatility)
+                    time_factor = 0.7
+
+                # === Volatility clustering (GARCH-like) ===
+                # Update volatility state based on recent shocks
+                shock = np.random.normal(0, 0.002)
+                volatility_state = 0.7 * volatility_state + 0.3 * abs(prev_return) + 0.5 * abs(shock)
+                volatility_state = np.clip(volatility_state, 0.005, 0.04)
+
+                current_vol = volatility_state * time_factor
+
+                # === Generate returns with fat tails ===
+                # Mix of normal and student-t for fat tails
+                if np.random.random() < 0.95:
+                    returns = np.random.normal(daily_drift, current_vol)
                 else:
-                    volatility = daily_volatility
+                    # Fat tail events (use student-t distribution)
+                    returns = np.random.standard_t(df=3) * current_vol * 2
 
-                # Microstructure noise
-                returns = np.random.normal(daily_drift, volatility)
+                # === Momentum and mean reversion ===
+                momentum = prev_return * 0.15  # Momentum continuation
+                mean_reversion = -prev_return * 0.25 if abs(prev_return) > 0.005 else 0  # Mean reversion on large moves
+                returns += momentum + mean_reversion
 
-                # Add mean reversion
-                if minute_idx > 0:
-                    prev_return = all_data[-1]['Returns']
-                    returns -= prev_return * 0.1  # Mean reversion
+                # === News events (sudden jumps) ===
+                if minute_idx in news_times:
+                    news_impact = np.random.choice([-1, 1]) * np.random.uniform(0.005, 0.015)
+                    returns += news_impact
+                    print(f"  News event at {timestamp}: {news_impact*100:.2f}% impact")
 
+                # === Microstructure: bid-ask bounce ===
+                bid_ask_bounce = np.random.choice([-1, 1]) * np.random.uniform(0, 0.0005)
+                returns += bid_ask_bounce
+
+                # Update price
                 base_price *= (1 + returns)
 
-                # Generate OHLC
-                high = base_price * (1 + np.abs(np.random.normal(0, 0.002)))
-                low = base_price * (1 - np.abs(np.random.normal(0, 0.002)))
-                open_price = all_data[-1]['Close'] if all_data else base_price
-                close = base_price
+                # === Generate realistic OHLC ===
+                # High and low should respect the open-close relationship
+                spread = abs(np.random.normal(0, current_vol * 0.5))
 
-                # Volume (higher at open/close)
-                base_volume = 500000
-                if minute_in_day < 12 or minute_in_day > 66:
-                    volume = base_volume * np.random.uniform(1.5, 2.5)
+                # Determine if bar is bullish or bearish
+                is_bullish = returns > 0
+
+                if is_bullish:
+                    open_price = all_data[-1]['Close'] if all_data else base_price * 0.999
+                    close = base_price
+                    high = close * (1 + spread)
+                    low = open_price * (1 - spread * 0.6)
                 else:
-                    volume = base_volume * np.random.uniform(0.5, 1.5)
+                    open_price = all_data[-1]['Close'] if all_data else base_price * 1.001
+                    close = base_price
+                    low = close * (1 - spread)
+                    high = open_price * (1 + spread * 0.6)
+
+                # Ensure OHLC relationships hold
+                high = max(high, open_price, close)
+                low = min(low, open_price, close)
+
+                # === Realistic volume patterns ===
+                base_volume = 2000000  # Base volume per 5-min bar
+
+                # U-shaped volume (high at open/close)
+                volume_factor = 1.0
+                if minute_in_day < 12:  # First hour
+                    volume_factor = 2.5 - (minute_in_day / 12) * 1.5
+                elif minute_in_day > 66:  # Last hour
+                    volume_factor = 1.0 + ((minute_in_day - 66) / 12) * 1.5
+                else:  # Mid-day
+                    volume_factor = 0.6
+
+                # Volume increases with volatility
+                vol_multiplier = 1 + abs(returns) * 50
+
+                # Volume spikes on news
+                if minute_idx in news_times:
+                    vol_multiplier *= 3
+
+                volume = base_volume * volume_factor * vol_multiplier * np.random.uniform(0.8, 1.2)
 
                 all_data.append({
                     'Timestamp': timestamp,
@@ -176,8 +249,16 @@ class MLTradingSystem:
                     'Returns': returns
                 })
 
+                prev_return = returns
+
+            # End of day: sometimes trend reversal for next day
+            if np.random.random() < 0.3:
+                daily_trend *= -1
+
         df = pd.DataFrame(all_data)
         df.set_index('Timestamp', inplace=True)
+
+        print(f"  Generated {len(df)} bars | Price range: ${df['Close'].min():.2f} - ${df['Close'].max():.2f}")
 
         return df
 
